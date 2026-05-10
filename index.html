@@ -34,67 +34,119 @@ body {
         padding: 8px;
     }
     /* 如果你有特定的容器（如.div-class），也可以在这里调整 */
-}</style><script role="script" id="twine-user-script" type="text/twine-javascript">// 图片预加载管理器
+}</style><script role="script" id="twine-user-script" type="text/twine-javascript">// 高性能图片预加载管理器
 var ImagePreloader = (function() {
     var cache = {};
-    var currentImage = null;
-    var nextImage = null;
-    var preloadQueue = [];
+    var preloading = {};
+    var currentIndex = -1;
+    var maxCacheSize = 5;
+    var totalImages = 31;
+    var loadCallbacks = {};
     
-    // 预加载图片
-    function preloadImage(src, callback) {
-        if (cache[src]) {
-            if (callback) callback(cache[src]);
+    // 并行预加载多张图片
+    function preloadImages(sources, callback) {
+        var loaded = 0;
+        var total = sources.length;
+        
+        if (total === 0) {
+            if (callback) callback([]);
             return;
         }
         
-        var img = new Image();
-        img.onload = function() {
-            cache[src] = img;
-            if (callback) callback(img);
-        };
-        img.onerror = function() {
-            if (callback) callback(null);
-        };
-        img.src = src;
+        sources.forEach(function(src) {
+            if (cache[src]) {
+                loaded++;
+                if (loaded === total && callback) callback(sources);
+                return;
+            }
+            
+            if (preloading[src]) {
+                preloading[src].push(function() {
+                    loaded++;
+                    if (loaded === total && callback) callback(sources);
+                });
+                return;
+            }
+            
+            preloading[src] = [];
+            var img = new Image();
+            img.onload = function() {
+                cache[src] = img;
+                loaded++;
+                
+                // 触发回调
+                if (preloading[src]) {
+                    preloading[src].forEach(function(cb) { cb(); });
+                    delete preloading[src];
+                }
+                
+                // 触发全局加载完成回调
+                if (loadCallbacks[src]) {
+                    loadCallbacks[src].forEach(function(cb) { cb(img); });
+                    delete loadCallbacks[src];
+                }
+                
+                if (loaded === total && callback) callback(sources);
+            };
+            img.onerror = function() {
+                loaded++;
+                if (preloading[src]) {
+                    preloading[src].forEach(function(cb) { cb(); });
+                    delete preloading[src];
+                }
+                if (loaded === total && callback) callback(sources);
+            };
+            img.src = src;
+        });
     }
     
-    // 释放指定图片的缓存
-    function releaseImage(src) {
-        if (cache[src]) {
-            cache[src] = null;
-            delete cache[src];
-        }
+    // 获取图片源路径
+    function getImageSrc(index) {
+        return 'img/' + index + '.png';
     }
     
-    // 预加载当前和下一张图片
-    function preloadCurrentAndNext(currentSrc, nextSrc) {
-        // 预加载当前图片
-        preloadImage(currentSrc);
-        
-        // 预加载下一张图片
-        if (nextSrc && nextSrc !== currentSrc) {
-            preloadImage(nextSrc);
-            nextImage = nextSrc;
+    // 获取当前窗口内需要预加载的图片索引
+    function getWindowIndices(currentIdx, windowSize) {
+        var indices = [];
+        for (var i = currentIdx - 1; i <= currentIdx + windowSize; i++) {
+            if (i >= 0 && i < totalImages) {
+                indices.push(i);
+            }
         }
-        
-        // 如果有上一张图片且不是当前或下一张，释放它
-        if (currentImage && currentImage !== currentSrc && currentImage !== nextSrc) {
-            releaseImage(currentImage);
-        }
-        
-        // 更新当前图片
-        currentImage = currentSrc;
+        return indices;
     }
     
-    // 清理所有缓存
-    function clearCache() {
+    // 释放不在窗口内的图片缓存
+    function releaseOutOfWindow(currentIdx, windowSize) {
+        var windowIndices = getWindowIndices(currentIdx, windowSize);
+        var windowSet = new Set(windowIndices.map(function(i) { return getImageSrc(i); }));
+        
         for (var src in cache) {
-            cache[src] = null;
-            delete cache[src];
+            if (!windowSet.has(src)) {
+                cache[src] = null;
+                delete cache[src];
+            }
         }
-        currentImage = null;
-        nextImage = null;
+    }
+    
+    // 预加载窗口
+    function preloadWindow(currentIdx, windowSize, callback) {
+        var indices = getWindowIndices(currentIdx, windowSize);
+        var sources = indices.map(function(i) { return getImageSrc(i); });
+        
+        preloadImages(sources, callback);
+        releaseOutOfWindow(currentIdx, windowSize);
+        currentIndex = currentIdx;
+    }
+    
+    // 开始预加载（应用启动时）
+    function startInitialPreload(callback) {
+        // 首先预加载前4张图片
+        var initialSources = [];
+        for (var i = 0; i < Math.min(4, totalImages); i++) {
+            initialSources.push(getImageSrc(i));
+        }
+        preloadImages(initialSources, callback);
     }
     
     // 获取缓存状态
@@ -103,23 +155,112 @@ var ImagePreloader = (function() {
         return {
             cachedImages: keys.length,
             cachedUrls: keys,
-            currentImage: currentImage,
-            nextImage: nextImage
+            currentIndex: currentIndex,
+            totalImages: totalImages
         };
     }
     
+    // 注册图片加载回调
+    function onImageLoaded(src, callback) {
+        if (cache[src]) {
+            callback(cache[src]);
+            return;
+        }
+        if (!loadCallbacks[src]) {
+            loadCallbacks[src] = [];
+        }
+        loadCallbacks[src].push(callback);
+    }
+    
     return {
-        preload: preloadImage,
-        release: releaseImage,
-        preloadCurrentAndNext: preloadCurrentAndNext,
-        clearCache: clearCache,
-        getCacheInfo: getCacheInfo
+        preloadWindow: preloadWindow,
+        startInitialPreload: startInitialPreload,
+        getCacheInfo: getCacheInfo,
+        onImageLoaded: onImageLoaded,
+        getImageSrc: getImageSrc
     };
 })();
 
-// 监听 passage 变化事件
+// 加载指示器管理器
+var LoadingIndicator = (function() {
+    var indicator = null;
+    
+    function create() {
+        if (indicator) return;
+        
+        indicator = document.createElement('div');
+        indicator.id = 'image-loading-indicator';
+        indicator.style.cssText = `
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            z-index: 9999;
+            background: rgba(0, 0, 0, 0.7);
+            padding: 20px 40px;
+            border-radius: 10px;
+            color: white;
+            font-size: 16px;
+            text-align: center;
+            display: none;
+        `;
+        
+        var spinner = document.createElement('div');
+        spinner.style.cssText = `
+            width: 40px;
+            height: 40px;
+            border: 4px solid rgba(255, 255, 255, 0.3);
+            border-top-color: white;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 10px;
+        `;
+        indicator.appendChild(spinner);
+        
+        var text = document.createElement('span');
+        text.textContent = '加载中...';
+        indicator.appendChild(text);
+        
+        var style = document.createElement('style');
+        style.textContent = `
+            @keyframes spin {
+                to { transform: rotate(360deg); }
+            }
+        `;
+        document.head.appendChild(style);
+        
+        document.body.appendChild(indicator);
+    }
+    
+    function show(message) {
+        create();
+        indicator.style.display = 'block';
+        var span = indicator.querySelector('span');
+        if (span) span.textContent = message || '加载中...';
+    }
+    
+    function hide() {
+        if (indicator) {
+            indicator.style.display = 'none';
+        }
+    }
+    
+    return {
+        show: show,
+        hide: hide
+    };
+})();
+
+// 主应用逻辑
 document.addEventListener('DOMContentLoaded', function() {
-    // 当 passage 显示时触发
+    // 启动时预加载初始图片
+    LoadingIndicator.show('正在准备游戏资源...');
+    
+    ImagePreloader.startInitialPreload(function() {
+        LoadingIndicator.hide();
+    });
+    
+    // 监听 passage 变化事件
     document.addEventListener('showpassage:after', function(event) {
         var passageElement = document.querySelector('tw-passage');
         if (!passageElement) return;
@@ -128,24 +269,22 @@ document.addEventListener('DOMContentLoaded', function() {
         var currentImg = passageElement.querySelector('img');
         if (currentImg) {
             var currentSrc = currentImg.getAttribute('src');
+            var match = currentSrc.match(/img\/(\d+)\.png/);
             
-            // 尝试获取下一个 passage 的图片（根据链接）
-            var nextLinks = passageElement.querySelectorAll('tw-link, a');
-            var nextSrc = null;
-            
-            if (nextLinks.length > 0) {
-                // 模拟下一个 passage 的图片名（假设图片按顺序命名）
-                // 从当前图片名推断下一张
-                var match = currentSrc.match(/img\/(\d+)\.png/);
-                if (match) {
-                    var currentNum = parseInt(match[1]);
-                    var nextNum = currentNum + 1;
-                    nextSrc = 'img/' + nextNum + '.png';
-                }
+            if (match) {
+                var currentIdx = parseInt(match[1]);
+                
+                // 预加载当前位置周围的图片（窗口大小为3）
+                ImagePreloader.preloadWindow(currentIdx, 3);
+                
+                // 为图片添加加载指示器
+                currentImg.style.opacity = '0';
+                currentImg.style.transition = 'opacity 0.3s ease';
+                
+                ImagePreloader.onImageLoaded(currentSrc, function() {
+                    currentImg.style.opacity = '1';
+                });
             }
-            
-            // 使用移动窗口模式预加载
-            ImagePreloader.preloadCurrentAndNext(currentSrc, nextSrc);
         }
     });
     
