@@ -34,13 +34,129 @@ body {
         padding: 8px;
     }
     /* 如果你有特定的容器（如.div-class），也可以在这里调整 */
-}</style><script role="script" id="twine-user-script" type="text/twine-javascript">// 这段代码会在故事加载时执行
-setTimeout(function() {
-    var controls = document.getElementById('ui-history-controls');
-    if (controls) {
-        controls.style.display = 'none';
+}</style><script role="script" id="twine-user-script" type="text/twine-javascript">// 图片预加载管理器
+var ImagePreloader = (function() {
+    var cache = {};
+    var currentImage = null;
+    var nextImage = null;
+    var preloadQueue = [];
+    
+    // 预加载图片
+    function preloadImage(src, callback) {
+        if (cache[src]) {
+            if (callback) callback(cache[src]);
+            return;
+        }
+        
+        var img = new Image();
+        img.onload = function() {
+            cache[src] = img;
+            if (callback) callback(img);
+        };
+        img.onerror = function() {
+            if (callback) callback(null);
+        };
+        img.src = src;
     }
-}, 100);</script><tw-passagedata pid="1" name="开始" tags="" position="1450,425" size="100,100">&lt;meta name=&quot;viewport&quot; content=&quot;width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no&quot;&gt;
+    
+    // 释放指定图片的缓存
+    function releaseImage(src) {
+        if (cache[src]) {
+            cache[src] = null;
+            delete cache[src];
+        }
+    }
+    
+    // 预加载当前和下一张图片
+    function preloadCurrentAndNext(currentSrc, nextSrc) {
+        // 预加载当前图片
+        preloadImage(currentSrc);
+        
+        // 预加载下一张图片
+        if (nextSrc && nextSrc !== currentSrc) {
+            preloadImage(nextSrc);
+            nextImage = nextSrc;
+        }
+        
+        // 如果有上一张图片且不是当前或下一张，释放它
+        if (currentImage && currentImage !== currentSrc && currentImage !== nextSrc) {
+            releaseImage(currentImage);
+        }
+        
+        // 更新当前图片
+        currentImage = currentSrc;
+    }
+    
+    // 清理所有缓存
+    function clearCache() {
+        for (var src in cache) {
+            cache[src] = null;
+            delete cache[src];
+        }
+        currentImage = null;
+        nextImage = null;
+    }
+    
+    // 获取缓存状态
+    function getCacheInfo() {
+        var keys = Object.keys(cache);
+        return {
+            cachedImages: keys.length,
+            cachedUrls: keys,
+            currentImage: currentImage,
+            nextImage: nextImage
+        };
+    }
+    
+    return {
+        preload: preloadImage,
+        release: releaseImage,
+        preloadCurrentAndNext: preloadCurrentAndNext,
+        clearCache: clearCache,
+        getCacheInfo: getCacheInfo
+    };
+})();
+
+// 监听 passage 变化事件
+document.addEventListener('DOMContentLoaded', function() {
+    // 当 passage 显示时触发
+    document.addEventListener('showpassage:after', function(event) {
+        var passageElement = document.querySelector('tw-passage');
+        if (!passageElement) return;
+        
+        // 找到当前 passage 中的图片
+        var currentImg = passageElement.querySelector('img');
+        if (currentImg) {
+            var currentSrc = currentImg.getAttribute('src');
+            
+            // 尝试获取下一个 passage 的图片（根据链接）
+            var nextLinks = passageElement.querySelectorAll('tw-link, a');
+            var nextSrc = null;
+            
+            if (nextLinks.length > 0) {
+                // 模拟下一个 passage 的图片名（假设图片按顺序命名）
+                // 从当前图片名推断下一张
+                var match = currentSrc.match(/img\/(\d+)\.png/);
+                if (match) {
+                    var currentNum = parseInt(match[1]);
+                    var nextNum = currentNum + 1;
+                    nextSrc = 'img/' + nextNum + '.png';
+                }
+            }
+            
+            // 使用移动窗口模式预加载
+            ImagePreloader.preloadCurrentAndNext(currentSrc, nextSrc);
+        }
+    });
+    
+    // 隐藏历史控制按钮
+    setTimeout(function() {
+        var controls = document.getElementById('ui-history-controls');
+        if (controls) {
+            controls.style.display = 'none';
+        }
+    }, 100);
+});</script><tw-passagedata pid="1" name="开始" tags="" position="1450,425" size="100,100">&lt;meta name=&quot;viewport&quot; content=&quot;width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no&quot;&gt;
 &lt;img src=&quot;img/0.png&quot; width=&quot;500px&quot;&gt;
 你叫逍遥，出生在花国边境的一个普通农户家庭。父亲是个老实巴交的农民，母亲温柔善良，家中还有一个妹妹。你从小跟着乡里的武师习武，练就了一身不错的功夫。
 
