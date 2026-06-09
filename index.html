@@ -34,112 +34,16 @@ body {
         padding: 8px;
     }
     /* 如果你有特定的容器（如.div-class），也可以在这里调整 */
-}</style><script role="script" id="twine-user-script" type="text/twine-javascript">// 高性能图片预加载管理器 - 极速版
+}</style><script role="script" id="twine-user-script" type="text/twine-javascript">// 极速图片预加载管理器 - 无限制并发版
 var ImagePreloader = (function() {
     var cache = {};
     var preloading = {};
     var currentIndex = -1;
-    var maxCacheSize = 8;
+    var maxCacheSize = 15;
     var totalImages = 31;
     var loadCallbacks = {};
-    var loadingQueue = [];
-    var isProcessingQueue = false;
     
-    // 创建低质量占位图（渐进式加载）
-    function createPlaceholder(width, height) {
-        var canvas = document.createElement('canvas');
-        canvas.width = width || 100;
-        canvas.height = height || 100;
-        var ctx = canvas.getContext('2d');
-        
-        // 创建渐变背景作为占位
-        var gradient = ctx.createLinearGradient(0, 0, canvas.width, canvas.height);
-        gradient.addColorStop(0, '#e8e8e8');
-        gradient.addColorStop(1, '#f5f5f5');
-        ctx.fillStyle = gradient;
-        ctx.fillRect(0, 0, canvas.width, canvas.height);
-        
-        // 添加加载动画点
-        ctx.fillStyle = '#cccccc';
-        ctx.beginPath();
-        ctx.arc(canvas.width / 2, canvas.height / 2, 8, 0, Math.PI * 2);
-        ctx.fill();
-        
-        return canvas.toDataURL();
-    }
-    
-    // 处理加载队列（控制并发数）
-    function processQueue() {
-        if (isProcessingQueue || loadingQueue.length === 0) return;
-        
-        isProcessingQueue = true;
-        var concurrentCount = 3; // 同时加载3张图片
-        
-        for (var i = 0; i < concurrentCount && loadingQueue.length > 0; i++) {
-            var task = loadingQueue.shift();
-            loadImageWithRetry(task.src, task.callback);
-        }
-        
-        setTimeout(function() {
-            isProcessingQueue = false;
-            processQueue();
-        }, 150);
-    }
-    
-    // 带重试机制的图片加载
-    function loadImageWithRetry(src, callback, retryCount) {
-        retryCount = retryCount || 0;
-        
-        if (cache[src]) {
-            callback && callback(cache[src]);
-            return;
-        }
-        
-        if (preloading[src]) {
-            preloading[src].push(callback);
-            return;
-        }
-        
-        preloading[src] = [];
-        var img = new Image();
-        img.crossOrigin = 'anonymous';
-        img.fetchPriority = 'high';
-        
-        img.onload = function() {
-            cache[src] = img;
-            
-            if (preloading[src]) {
-                preloading[src].forEach(function(cb) { cb && cb(img); });
-                delete preloading[src];
-            }
-            
-            if (loadCallbacks[src]) {
-                loadCallbacks[src].forEach(function(cb) { cb(img); });
-                delete loadCallbacks[src];
-            }
-        };
-        
-        img.onerror = function() {
-            if (retryCount < 2) {
-                setTimeout(function() {
-                    loadImageWithRetry(src, callback, retryCount + 1);
-                }, 500);
-            } else {
-                if (preloading[src]) {
-                    preloading[src].forEach(function(cb) { cb && cb(null); });
-                    delete preloading[src];
-                }
-            }
-        };
-        
-        // 使用 decode 异步解码
-        img.src = src;
-        if (img.decode) {
-            img.decode().catch(function() {});
-        }
-    }
-    
-    // 并行预加载多张图片
+    // 直接并行加载，不限制并发数
     function preloadImages(sources, callback) {
         var loaded = 0;
         var total = sources.length;
@@ -150,16 +54,53 @@ var ImagePreloader = (function() {
         }
         
         sources.forEach(function(src) {
-            loadingQueue.push({
-                src: src,
-                callback: function() {
+            if (cache[src]) {
+                loaded++;
+                if (loaded === total && callback) callback(sources);
+                return;
+            }
+            
+            if (preloading[src]) {
+                preloading[src].push(function() {
                     loaded++;
                     if (loaded === total && callback) callback(sources);
+                });
+                return;
+            }
+            
+            preloading[src] = [];
+            var img = new Image();
+            img.crossOrigin = 'anonymous';
+            img.fetchPriority = 'high';
+            
+            img.onload = function() {
+                cache[src] = img;
+                loaded++;
+                
+                if (preloading[src]) {
+                    preloading[src].forEach(function(cb) { cb && cb(); });
+                    delete preloading[src];
                 }
-            });
+                
+                if (loadCallbacks[src]) {
+                    loadCallbacks[src].forEach(function(cb) { cb(img); });
+                    delete loadCallbacks[src];
+                }
+                
+                if (loaded === total && callback) callback(sources);
+            };
+            
+            img.onerror = function() {
+                loaded++;
+                if (preloading[src]) {
+                    preloading[src].forEach(function(cb) { cb && cb(); });
+                    delete preloading[src];
+                }
+                if (loaded === total && callback) callback(sources);
+            };
+            
+            img.src = src;
         });
-        
-        processQueue();
     }
     
     // 获取图片源路径
@@ -167,10 +108,10 @@ var ImagePreloader = (function() {
         return 'img/' + index + '.png';
     }
     
-    // 获取当前窗口内需要预加载的图片索引（扩展窗口）
+    // 获取当前窗口内需要预加载的图片索引
     function getWindowIndices(currentIdx, windowSize) {
         var indices = [];
-        for (var i = currentIdx - 2; i <= currentIdx + windowSize + 2; i++) {
+        for (var i = currentIdx - 3; i <= currentIdx + windowSize + 3; i++) {
             if (i >= 0 && i < totalImages) {
                 indices.push(i);
             }
@@ -178,7 +119,7 @@ var ImagePreloader = (function() {
         return indices;
     }
     
-    // 智能释放缓存（保留最近使用的）
+    // 智能释放缓存
     function releaseOutOfWindow(currentIdx, windowSize) {
         var windowIndices = getWindowIndices(currentIdx, windowSize);
         var windowSet = new Set(windowIndices.map(function(i) { return getImageSrc(i); }));
@@ -201,10 +142,10 @@ var ImagePreloader = (function() {
         currentIndex = currentIdx;
     }
     
-    // 开始预加载（应用启动时，预加载更多）
+    // 开始预加载（应用启动时，预加载更多图片）
     function startInitialPreload(callback) {
         var initialSources = [];
-        for (var i = 0; i < Math.min(6, totalImages); i++) {
+        for (var i = 0; i < Math.min(10, totalImages); i++) {
             initialSources.push(getImageSrc(i));
         }
         preloadImages(initialSources, callback);
@@ -238,8 +179,7 @@ var ImagePreloader = (function() {
         startInitialPreload: startInitialPreload,
         getCacheInfo: getCacheInfo,
         onImageLoaded: onImageLoaded,
-        getImageSrc: getImageSrc,
-        createPlaceholder: createPlaceholder
+        getImageSrc: getImageSrc
     };
 })();
 
