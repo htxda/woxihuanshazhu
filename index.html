@@ -313,42 +313,12 @@ var LoadingIndicator = (function() {
     };
 })();
 
-// 渐进式图片加载函数
+// 直接图片加载函数（无过渡效果）
 function progressiveImageLoad(img, src) {
     if (!img || !src) return;
     
-    // 设置初始状态
-    img.style.opacity = '0';
-    img.style.filter = 'blur(20px)';
-    img.style.transition = 'opacity 0.5s ease-out, filter 0.5s ease-out';
-    img.style.minHeight = '200px';
-    
-    // 创建临时图片对象
-    var tempImg = new Image();
-    tempImg.crossOrigin = 'anonymous';
-    
-    tempImg.onload = function() {
-        img.src = src;
-        img.style.filter = 'blur(0px)';
-        
-        // 等待图片解码完成后显示
-        if (img.decode) {
-            img.decode().then(function() {
-                img.style.opacity = '1';
-            }).catch(function() {
-                img.style.opacity = '1';
-            });
-        } else {
-            img.style.opacity = '1';
-        }
-    };
-    
-    tempImg.onerror = function() {
-        img.style.opacity = '1';
-        img.style.filter = 'blur(0px)';
-    };
-    
-    tempImg.src = src;
+    // 直接设置图片，不使用过渡效果
+    img.src = src;
 }
 
 // 主应用逻辑
