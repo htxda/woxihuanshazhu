@@ -34,17 +34,49 @@ body {
         padding: 8px;
     }
     /* 如果你有特定的容器（如.div-class），也可以在这里调整 */
-}</style><script role="script" id="twine-user-script" type="text/twine-javascript">// 极速图片预加载管理器 - 无限制并发版
+}</style><script role="script" id="twine-user-script" type="text/twine-javascript">// 极速图片预加载管理器 - Fetch API 版本
 var ImagePreloader = (function() {
     var cache = {};
     var preloading = {};
     var currentIndex = -1;
-    var maxCacheSize = 15;
     var totalImages = 31;
     var loadCallbacks = {};
     
-    // 直接并行加载，不限制并发数
-    function preloadImages(sources, callback) {
+    // 使用 Fetch API 快速加载图片
+    async function fetchImage(src) {
+        try {
+            const response = await fetch(src, {
+                method: 'GET',
+                mode: 'cors',
+                cache: 'force-cache',
+                priority: 'high'
+            });
+            
+            if (!response.ok) throw new Error('Network response was not ok');
+            
+            const blob = await response.blob();
+            const img = new Image();
+            img.src = URL.createObjectURL(blob);
+            
+            return new Promise((resolve, reject) => {
+                img.onload = () => {
+                    resolve(img);
+                };
+                img.onerror = reject;
+            });
+        } catch (error) {
+            // Fallback to regular Image loading
+            return new Promise((resolve, reject) => {
+                const img = new Image();
+                img.onload = () => resolve(img);
+                img.onerror = reject;
+                img.src = src;
+            });
+        }
+    }
+    
+    // 并行预加载多张图片（使用 Promise.all）
+    async function preloadImages(sources, callback) {
         var loaded = 0;
         var total = sources.length;
         
@@ -53,54 +85,44 @@ var ImagePreloader = (function() {
             return;
         }
         
-        sources.forEach(function(src) {
-            if (cache[src]) {
-                loaded++;
-                if (loaded === total && callback) callback(sources);
-                return;
-            }
-            
-            if (preloading[src]) {
-                preloading[src].push(function() {
-                    loaded++;
-                    if (loaded === total && callback) callback(sources);
-                });
-                return;
-            }
-            
+        // 过滤已缓存的图片
+        var uncachedSources = sources.filter(src => !cache[src]);
+        
+        if (uncachedSources.length === 0) {
+            callback && callback(sources);
+            return;
+        }
+        
+        // 并行加载所有未缓存的图片
+        const promises = uncachedSources.map(src => {
             preloading[src] = [];
-            var img = new Image();
-            img.crossOrigin = 'anonymous';
-            img.fetchPriority = 'high';
-            
-            img.onload = function() {
+            return fetchImage(src).then(img => {
                 cache[src] = img;
-                loaded++;
                 
                 if (preloading[src]) {
-                    preloading[src].forEach(function(cb) { cb && cb(); });
+                    preloading[src].forEach(cb => cb && cb());
                     delete preloading[src];
                 }
                 
                 if (loadCallbacks[src]) {
-                    loadCallbacks[src].forEach(function(cb) { cb(img); });
+                    loadCallbacks[src].forEach(cb => cb(img));
                     delete loadCallbacks[src];
                 }
                 
-                if (loaded === total && callback) callback(sources);
-            };
-            
-            img.onerror = function() {
                 loaded++;
+                return src;
+            }).catch(() => {
                 if (preloading[src]) {
-                    preloading[src].forEach(function(cb) { cb && cb(); });
+                    preloading[src].forEach(cb => cb && cb());
                     delete preloading[src];
                 }
-                if (loaded === total && callback) callback(sources);
-            };
-            
-            img.src = src;
+                loaded++;
+                return src;
+            });
         });
+        
+        await Promise.all(promises);
+        callback && callback(sources);
     }
     
     // 获取图片源路径
@@ -111,10 +133,8 @@ var ImagePreloader = (function() {
     // 获取当前窗口内需要预加载的图片索引
     function getWindowIndices(currentIdx, windowSize) {
         var indices = [];
-        for (var i = currentIdx - 3; i <= currentIdx + windowSize + 3; i++) {
-            if (i >= 0 && i < totalImages) {
-                indices.push(i);
-            }
+        for (var i = Math.max(0, currentIdx - 5); i <= Math.min(totalImages - 1, currentIdx + windowSize + 5); i++) {
+            indices.push(i);
         }
         return indices;
     }
@@ -126,6 +146,10 @@ var ImagePreloader = (function() {
         
         for (var src in cache) {
             if (!windowSet.has(src)) {
+                // 释放 blob URL
+                if (cache[src] && cache[src].src && cache[src].src.startsWith('blob:')) {
+                    URL.revokeObjectURL(cache[src].src);
+                }
                 cache[src] = null;
                 delete cache[src];
             }
@@ -142,10 +166,10 @@ var ImagePreloader = (function() {
         currentIndex = currentIdx;
     }
     
-    // 开始预加载（应用启动时，预加载更多图片）
+    // 开始预加载（应用启动时，预加载全部图片）
     function startInitialPreload(callback) {
         var initialSources = [];
-        for (var i = 0; i < Math.min(10, totalImages); i++) {
+        for (var i = 0; i < totalImages; i++) {
             initialSources.push(getImageSrc(i));
         }
         preloadImages(initialSources, callback);
